@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>IELTS AI Tutor — Band 4 → 6.5</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0f1117; font-family: 'Segoe UI', system-ui, sans-serif; color: #e2e8f0; }
+    textarea, input { font-family: inherit; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #1a1d2e; }
+    ::-webkit-scrollbar-thumb { background: #2a2d3e; border-radius: 99px; }
+    input[type=range] { cursor: pointer; }
+    .skill-card:hover { border-color: var(--hover-color) !important; transform: translateY(-2px); box-shadow: 0 8px 24px var(--shadow-color); }
+    .skill-card { transition: all 0.2s; }
+    .btn-primary { transition: opacity 0.2s, transform 0.1s; }
+    .btn-primary:hover:not(:disabled) { opacity: 0.9; transform: translateY(-1px); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* API Key modal */
+    #api-modal { position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:999; }
+    #api-modal.hidden { display:none; }
+    #api-box { background:#1a1d2e;border:1px solid #2a2d3e;border-radius:16px;padding:32px;max-width:440px;width:90%; }
+  </style>
+</head>
+<body>
+
+<!-- API Key Modal -->
+<div id="api-modal">
+  <div id="api-box">
+    <div style="font-size:24px;margin-bottom:8px;">🔑</div>
+    <div style="font-weight:800;font-size:18px;margin-bottom:8px;color:#e2e8f0;">Nhập Anthropic API Key</div>
+    <div style="color:#64748b;font-size:13px;line-height:1.7;margin-bottom:20px;">
+      Để AI chấm điểm Writing & Speaking, bạn cần API key miễn phí từ Anthropic.<br/>
+      Lấy key tại: <a href="https://console.anthropic.com" target="_blank" style="color:#4f8ef7;">console.anthropic.com</a><br/>
+      <span style="color:#f97316;">Key chỉ lưu trên máy bạn, không gửi đi đâu cả.</span>
+    </div>
+    <input id="api-key-input" type="password" placeholder="sk-ant-..." style="width:100%;background:#0f1117;border:1px solid #2a2d3e;border-radius:8px;padding:12px 14px;color:#e2e8f0;font-size:14px;outline:none;margin-bottom:12px;" />
+    <button onclick="saveApiKey()" style="width:100%;padding:12px;border-radius:8px;border:none;background:linear-gradient(135deg,#4f8ef7,#6366f1);color:#fff;font-weight:700;font-size:15px;cursor:pointer;">
+      Bắt đầu học →
+    </button>
+    <div style="margin-top:12px;color:#64748b;font-size:12px;text-align:center;">
+      Không có key? Bạn vẫn dùng được Reading & Listening (không cần AI)
+      <br/><button onclick="skipApiKey()" style="background:none;border:none;color:#4f8ef7;cursor:pointer;font-size:12px;text-decoration:underline;margin-top:4px;">Bỏ qua</button>
+    </div>
+  </div>
+</div>
+
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useRef, useEffect } = React;
+
+// ── API Key helpers ────────────────────────────────────────────────────────────
+function getApiKey() { return localStorage.getItem('ielts_api_key') || ''; }
+
+async function callClaude(prompt, systemPrompt) {
+  const key = getApiKey();
+  if (!key) return '⚠️ Chưa có API key. Reload trang và nhập key để dùng tính năng AI.';
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+    body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 1000, system: systemPrompt, messages: [{ role: 'user', content: prompt }] }),
+  });
+  const data = await res.json();
+  if (data.error) return '❌ ' + data.error.message;
+  return data.content?.[0]?.text || 'Không nhận được phản hồi.';
+}
+
+// ── Data ───────────────────────────────────────────────────────────────────────
+const SKILLS = [
+  { id:'writing',   label:'Writing',   icon:'✍️',  color:'#4f8ef7', desc:'Task 1 & Task 2 — AI chấm theo 4 tiêu chí IELTS' },
+  { id:'speaking',  label:'Speaking',  icon:'🎙️', color:'#22d3a5', desc:'Luyện Part 1, 2, 3 — AI nhận xét & viết câu mẫu' },
+  { id:'listening', label:'Listening', icon:'🎧',  color:'#f97316', desc:'Dictation — nghe chép chính tả từ đề thi thật' },
+  { id:'reading',   label:'Reading',   icon:'📖',  color:'#a78bfa', desc:'Chiến lược làm bài + tra từ vựng học thuật' },
+];
+
+const WRITING_PROMPTS = {
+  task1: [
+    "The chart below shows the percentage of households in owned and rented accommodation in England and Wales between 1918 and 2011. Summarise the information by selecting and reporting the main features, and make comparisons where relevant.",
+    "The graph below shows the number of university graduates in Canada from 1992 to 2007. Summarise the information by selecting and reporting the main features, and make comparisons where relevant.",
+    "The diagram below shows how solar panels convert sunlight into electricity. Summarise the information by selecting and reporting the main features.",
+  ],
+  task2: [
+    "Some people believe that it is best to accept a bad situation, such as an unsatisfactory job or shortage of money. Others argue that it is better to try and improve such situations. Discuss both these views and give your own opinion.",
+    "In many countries, the number of animals and plants is declining. Why do you think this is happening? How can this issue be resolved?",
+    "Some people think that environmental problems are too big for individuals to solve, while others think that the government cannot solve these problems unless individuals make some changes. To what extent do you agree or disagree?",
+  ],
+};
+
+const SPEAKING_PROMPTS = {
+  part1: [
+    "Do you work or are you a student? Tell me about your work/studies.",
+    "Do you enjoy reading? What kind of books do you like?",
+    "How important is it to be on time in your country?",
+  ],
+  part2: [
+    "Describe a place you have visited that you particularly enjoyed. You should say: where it is, when you visited, what you did there, and explain why you enjoyed it.",
+    "Describe a person who has influenced you. You should say: who this person is, how you know them, what they are like, and explain how they have influenced you.",
+    "Describe a time when you learned something new. You should say: what you learned, when you learned it, how you learned it, and explain why it was important to you.",
+  ],
+  part3: [
+    "Do you think travelling abroad is better than travelling within your own country? Why?",
+    "How do you think famous people influence young people in society?",
+    "How has technology changed the way people learn new things?",
+  ],
+};
+
+const DICTATION_SENTENCES = [
+  "The library will be closed for renovation from Monday to Wednesday next week.",
+  "Students are required to submit their assignments by five o'clock on Friday afternoon.",
+  "The conference will take place in the main hall on the third floor of the building.",
+  "Please note that the registration deadline has been extended to the end of this month.",
+  "The professor will hold office hours every Tuesday and Thursday from two to four.",
+  "All participants are asked to arrive at least fifteen minutes before the session begins.",
+  "The new sports centre will open to the public at the beginning of next month.",
+  "Applicants must provide two references from their previous employers or teachers.",
+];
+
+const READING_PASSAGE = {
+  title: "The Impact of Social Media on Modern Communication",
+  text: `Social media has fundamentally transformed the way humans communicate and interact with one another. Platforms such as Facebook, Twitter, and Instagram have created new channels for information sharing that were unimaginable just two decades ago.\n\nResearch conducted by the Pew Research Center indicates that approximately 72% of American adults use at least one social media platform regularly. This widespread adoption has had profound implications for both personal relationships and professional networking.\n\nCritics argue that while social media facilitates connection across geographical boundaries, it may simultaneously weaken face-to-face social bonds. Studies have shown that heavy social media users often report higher levels of loneliness and social isolation, a paradox that researchers continue to investigate.\n\nFurthermore, the speed at which information spreads through social networks has created new challenges for journalists and fact-checkers. Misinformation can reach millions of people within hours, making it increasingly difficult for authoritative sources to counter false narratives effectively.`,
+  questions: [
+    { q: "According to the passage, what percentage of American adults use social media regularly?", answer: "72%", type: "short" },
+    { q: "True, False, or Not Given: Social media has completely replaced face-to-face communication.", answer: "Not Given", type: "tfng", options: ["True","False","Not Given"] },
+    { q: "True, False, or Not Given: Heavy social media users often feel more lonely.", answer: "True", type: "tfng", options: ["True","False","Not Given"] },
+  ],
+};
+
+// ── Shared UI ──────────────────────────────────────────────────────────────────
+function FeedbackBox({ text, color }) {
+  return (
+    <div style={{ background: color+'11', border:`1px solid ${color}33`, borderRadius:12, padding:20, marginTop:16, lineHeight:1.7, fontSize:14, color:'#94a3b8', whiteSpace:'pre-wrap' }}>
+      <div style={{ color, fontWeight:600, marginBottom:8, fontSize:13 }}>🤖 Nhận xét từ AI</div>
+      {text}
+    </div>
+  );
+}
+
+function PromptBox({ color, label, text, onNew }) {
+  return (
+    <div style={{ background:color+'11', border:`1px solid ${color}33`, borderRadius:12, padding:16, marginBottom:16 }}>
+      <div style={{ color, fontWeight:600, fontSize:12, marginBottom:8 }}>{label}</div>
+      <div style={{ color:'#e2e8f0', lineHeight:1.7, fontSize:14 }}>{text}</div>
+      <button onClick={onNew} style={{ marginTop:12, padding:'6px 14px', borderRadius:6, border:`1px solid ${color}55`, background:'transparent', color, cursor:'pointer', fontSize:12 }}>🔀 Đề khác</button>
+    </div>
+  );
+}
+
+function SubmitBtn({ onClick, loading, disabled, color, label }) {
+  return (
+    <button onClick={onClick} disabled={loading||disabled} className="btn-primary"
+      style={{ marginTop:12, padding:'12px 28px', borderRadius:10, border:'none', cursor:'pointer', background:`linear-gradient(135deg,${color},#6366f1)`, color:'#fff', fontWeight:700, fontSize:15 }}>
+      {loading ? '⏳ AI đang xử lý...' : label}
+    </button>
+  );
+}
+
+// ── Writing ────────────────────────────────────────────────────────────────────
+function WritingModule() {
+  const [task,setTask] = useState('task2');
+  const [idx,setIdx] = useState(0);
+  const [essay,setEssay] = useState('');
+  const [feedback,setFeedback] = useState('');
+  const [loading,setLoading] = useState(false);
+  const color = '#4f8ef7';
+  const prompts = WRITING_PROMPTS[task];
+  const minW = task==='task1'?150:250;
+  const wc = essay.trim().split(/\s+/).filter(Boolean).length;
+
+  async function submit() {
+    setLoading(true); setFeedback('');
+    const sys = `Bạn là giám khảo IELTS chuyên nghiệp. Chấm bài theo 4 tiêu chí: Task Achievement (TA), Coherence & Cohesion (CC), Lexical Resource (LR), Grammatical Range & Accuracy (GRA). Trả lời bằng tiếng Việt theo format:\n📊 BAND SCORES:\n- TA: X.0\n- CC: X.0\n- LR: X.0\n- GRA: X.0\n- Ước tính tổng: X.0\n\n💪 Điểm mạnh:\n[2-3 điểm]\n\n⚠️ Cần cải thiện:\n[2-3 lỗi cụ thể]\n\n💡 Gợi ý nâng band:\n[lời khuyên cụ thể]`;
+    const result = await callClaude(`Đề (${task==='task1'?'Task 1':'Task 2'}):\n${prompts[idx]}\n\nBài viết (${wc} từ):\n${essay}`, sys);
+    setFeedback(result); setLoading(false);
+  }
+
+  return (
+    <div>
+      <div style={{ display:'flex', gap:8, marginBottom:20 }}>
+        {['task1','task2'].map(t => (
+          <button key={t} onClick={()=>{setTask(t);setIdx(0);setEssay('');setFeedback('');}}
+            style={{ padding:'8px 20px', borderRadius:8, border:'none', cursor:'pointer', background:task===t?color:'#2a2d3e', color:task===t?'#fff':'#94a3b8', fontWeight:task===t?700:400 }}>
+            {t==='task1'?'Task 1 (150+ từ)':'Task 2 (250+ từ)'}
+          </button>
+        ))}
+      </div>
+      <PromptBox color={color} label="ĐỀ BÀI" text={prompts[idx]} onNew={()=>{setIdx(i=>(i+1)%prompts.length);setEssay('');setFeedback('');}} />
+      <div style={{ position:'relative' }}>
+        <textarea value={essay} onChange={e=>setEssay(e.target.value)}
+          placeholder={`Viết bài của bạn ở đây... (tối thiểu ${minW} từ)`}
+          style={{ width:'100%', minHeight:220, background:'#12141f', border:`1px solid ${wc>=minW?color+'66':'#2a2d3e'}`, borderRadius:12, padding:16, color:'#e2e8f0', fontSize:14, lineHeight:1.8, resize:'vertical', outline:'none', transition:'border-color 0.3s' }} />
+        <div style={{ position:'absolute', bottom:12, right:16, color:wc>=minW?color:'#64748b', fontSize:13, fontWeight:600 }}>{wc} / {minW} từ</div>
+      </div>
+      <SubmitBtn onClick={submit} loading={loading} disabled={wc<20} color={color} label="🤖 Nộp bài — AI chấm điểm" />
+      {feedback && <FeedbackBox text={feedback} color={color} />}
+    </div>
+  );
+}
+
+// ── Speaking ───────────────────────────────────────────────────────────────────
+function SpeakingModule() {
+  const [part,setPart] = useState('part1');
+  const [idx,setIdx] = useState(0);
+  const [answer,setAnswer] = useState('');
+  const [feedback,setFeedback] = useState('');
+  const [loading,setLoading] = useState(false);
+  const [running,setRunning] = useState(false);
+  const [timer,setTimer] = useState(0);
+  const ref = useRef(null);
+  const color = '#22d3a5';
+  const prompt = SPEAKING_PROMPTS[part][idx];
+  const parts = { part1:'Part 1 (Giới thiệu)', part2:'Part 2 (Cue Card)', part3:'Part 3 (Thảo luận)' };
+
+  function toggleTimer() {
+    if (!running) { setRunning(true); ref.current = setInterval(()=>setTimer(t=>t+1),1000); }
+    else { setRunning(false); clearInterval(ref.current); }
+  }
+  useEffect(()=>()=>clearInterval(ref.current),[]);
+
+  async function submit() {
+    setLoading(true); setFeedback('');
+    const sys = `Bạn là giám khảo IELTS Speaking. Đánh giá theo 4 tiêu chí: Fluency & Coherence (FC), Lexical Resource (LR), Grammatical Range & Accuracy (GRA), Pronunciation (P). Trả lời tiếng Việt:\n📊 BAND SCORES:\n- FC: X.0 | LR: X.0 | GRA: X.0 | P: X.0\n- Ước tính tổng: X.0\n\n💪 Điểm mạnh: [cụ thể]\n⚠️ Cần cải thiện: [cụ thể với ví dụ]\n📝 Câu trả lời mẫu band 6.5+: [viết đoạn mẫu ngắn]`;
+    const result = await callClaude(`IELTS Speaking ${part}\nCâu hỏi: ${prompt}\nCâu trả lời: ${answer}`, sys);
+    setFeedback(result); setLoading(false);
+  }
+
+  const fmt = t => `${Math.floor(t/60).toString().padStart(2,'0')}:${(t%60).toString().padStart(2,'0')}`;
+
+  return (
+    <div>
+      <div style={{ display:'flex', gap:8, marginBottom:20, flexWrap:'wrap' }}>
+        {Object.keys(parts).map(p=>(
+          <button key={p} onClick={()=>{setPart(p);setIdx(0);setAnswer('');setFeedback('');setTimer(0);setRunning(false);clearInterval(ref.current);}}
+            style={{ padding:'8px 16px', borderRadius:8, border:'none', cursor:'pointer', background:part===p?color:'#2a2d3e', color:part===p?'#000':'#94a3b8', fontWeight:part===p?700:400, fontSize:13 }}>
+            {parts[p]}
+          </button>
+        ))}
+      </div>
+      <PromptBox color={color} label="CÂU HỎI" text={prompt} onNew={()=>{setIdx(i=>(i+1)%SPEAKING_PROMPTS[part].length);setAnswer('');setFeedback('');}} />
+      <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:12 }}>
+        <button onClick={toggleTimer} style={{ padding:'10px 20px', borderRadius:8, border:'none', cursor:'pointer', background:running?'#ef4444':color, color:running?'#fff':'#000', fontWeight:700 }}>
+          {running?'⏹ Dừng':'🎙 Bắt đầu nói'}
+        </button>
+        {timer>0 && <span style={{ color:running?'#ef4444':'#94a3b8', fontWeight:700, fontSize:18, fontFamily:'monospace' }}>{fmt(timer)}</span>}
+        {part==='part2' && <span style={{ color:'#64748b', fontSize:12 }}>Mục tiêu: 1-2 phút</span>}
+      </div>
+      <textarea value={answer} onChange={e=>setAnswer(e.target.value)}
+        placeholder="Gõ lại câu trả lời của bạn bằng tiếng Anh để AI nhận xét..."
+        style={{ width:'100%', minHeight:140, background:'#12141f', border:'1px solid #2a2d3e', borderRadius:12, padding:16, color:'#e2e8f0', fontSize:14, lineHeight:1.8, resize:'vertical', outline:'none' }} />
+      <SubmitBtn onClick={submit} loading={loading} disabled={answer.trim().length<20} color={color} label="🤖 AI nhận xét" />
+      {feedback && <FeedbackBox text={feedback} color={color} />}
+    </div>
+  );
+}
+
+// ── Listening ──────────────────────────────────────────────────────────────────
+function ListeningModule() {
+  const [idx,setIdx] = useState(0);
+  const [input,setInput] = useState('');
+  const [revealed,setRevealed] = useState(false);
+  const [score,setScore] = useState(null);
+  const [feedback,setFeedback] = useState('');
+  const [loading,setLoading] = useState(false);
+  const color = '#f97316';
+  const sentence = DICTATION_SENTENCES[idx];
+
+  function normalize(s){ return s.toLowerCase().replace(/[.,!?]/g,'').trim(); }
+  function check() {
+    const correct = normalize(sentence).split(' ');
+    const given = normalize(input).split(' ');
+    let m=0; correct.forEach((w,i)=>{ if(given[i]===w) m++; });
+    setScore(Math.round((m/correct.length)*100));
+    setRevealed(true);
+  }
+
+  async function analyze() {
+    setLoading(true); setFeedback('');
+    const result = await callClaude(`Câu gốc: "${sentence}"\nHọc sinh viết: "${input}"\n\nPhân tích lỗi sai chi tiết bằng tiếng Việt: từ nào sai, tại sao, cách luyện để không mắc lại.`, 'Bạn là giáo viên IELTS Listening. Phân tích ngắn gọn, thực tế bằng tiếng Việt.');
+    setFeedback(result); setLoading(false);
+  }
+
+  function next() { setIdx(i=>(i+1)%DICTATION_SENTENCES.length); setInput(''); setRevealed(false); setScore(null); setFeedback(''); }
+
+  function renderDiff() {
+    const correct = sentence.split(' ');
+    const given = normalize(input).split(' ');
+    return correct.map((word,i) => {
+      const ok = normalize(word)===given[i];
+      return React.createElement('span', { key:i, style:{ color:ok?color:'#ef4444', fontWeight:ok?400:700, background:ok?'transparent':'#ef444422', borderRadius:4, padding:'0 2px', textDecoration:ok?'none':'underline' }}, word+' ');
+    });
+  }
+
+  return (
+    <div>
+      <div style={{ background:'#12141f', borderRadius:12, padding:20, marginBottom:20, border:'1px solid #2a2d3e' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', marginBottom:12 }}>
+          <div style={{ color, fontWeight:700, fontSize:13 }}>🎧 DICTATION — Câu {idx+1} / {DICTATION_SENTENCES.length}</div>
+          <div style={{ color:'#64748b', fontSize:12 }}>Nghe → Chép lại chính xác</div>
+        </div>
+        <div style={{ background:color+'11', border:`1px solid ${color}33`, borderRadius:10, padding:'14px 18px', marginBottom:12 }}>
+          <div style={{ color:'#94a3b8', fontSize:13, lineHeight:1.7 }}>
+            💡 Dùng kết hợp với <strong style={{color}}>Cambridge IELTS</strong> hoặc <strong style={{color}}>Study4</strong> (miễn phí):<br/>
+            Nghe audio bên ngoài → quay lại đây chép lại → AI phân tích lỗi
+          </div>
+        </div>
+        <div style={{ color:'#64748b', fontSize:12 }}>Câu luyện tập hôm nay sẽ hiện sau khi bạn nộp để tránh nhìn trước.</div>
+      </div>
+
+      <textarea value={input} onChange={e=>setInput(e.target.value)} disabled={revealed}
+        placeholder="Gõ lại những gì bạn nghe được..."
+        style={{ width:'100%', minHeight:100, background:'#12141f', border:'1px solid #2a2d3e', borderRadius:12, padding:16, color:'#e2e8f0', fontSize:15, lineHeight:1.8, resize:'none', outline:'none', opacity:revealed?0.6:1 }} />
+
+      {!revealed ? (
+        <button onClick={check} disabled={!input.trim()}
+          style={{ marginTop:12, padding:'12px 28px', borderRadius:10, border:'none', cursor:'pointer', background:`linear-gradient(135deg,${color},#fbbf24)`, color:'#000', fontWeight:700, fontSize:15, opacity:!input.trim()?0.5:1 }}>
+          ✅ Kiểm tra
+        </button>
+      ) : (
+        <div>
+          <div style={{ marginTop:16, fontSize:15, lineHeight:2 }}>{renderDiff()}</div>
+          <div style={{ display:'flex', alignItems:'center', gap:16, marginTop:16, background:color+'11', borderRadius:10, padding:'12px 16px' }}>
+            <div style={{ fontSize:28, fontWeight:800, color }}>{score}%</div>
+            <div>
+              <div style={{ color:'#e2e8f0', fontWeight:600 }}>{score===100?'🎉 Hoàn hảo!':score>=80?'👍 Tốt lắm!':score>=60?'📚 Cần luyện thêm':'💪 Cố gắng hơn nhé!'}</div>
+              <div style={{ color:'#64748b', fontSize:13, marginTop:2 }}>Đáp án đúng phía trên (màu cam = đúng, đỏ = sai)</div>
+            </div>
+          </div>
+          <div style={{ display:'flex', gap:10, marginTop:12, flexWrap:'wrap' }}>
+            {score<100 && <button onClick={analyze} disabled={loading} style={{ padding:'10px 20px', borderRadius:8, border:`1px solid ${color}55`, background:'transparent', color, cursor:'pointer', fontWeight:600 }}>
+              {loading?'⏳ Đang phân tích...':'🤖 AI phân tích lỗi'}
+            </button>}
+            <button onClick={next} style={{ padding:'10px 20px', borderRadius:8, border:'none', background:color, color:'#000', cursor:'pointer', fontWeight:700 }}>Câu tiếp →</button>
+          </div>
+          {feedback && <FeedbackBox text={feedback} color={color} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Reading ────────────────────────────────────────────────────────────────────
+function ReadingModule() {
+  const [answers,setAnswers] = useState({});
+  const [submitted,setSubmitted] = useState(false);
+  const [vocab,setVocab] = useState('');
+  const [vocabResult,setVocabResult] = useState('');
+  const [vocabLoading,setVocabLoading] = useState(false);
+  const color = '#a78bfa';
+  const p = READING_PASSAGE;
+
+  const score = submitted ? p.questions.filter((q,i)=>answers[i]?.toLowerCase().trim()===q.answer.toLowerCase()).length : null;
+
+  async function lookupVocab() {
+    if(!vocab.trim()) return;
+    setVocabLoading(true); setVocabResult('');
+    const result = await callClaude(`Giải thích từ vựng học thuật IELTS: "${vocab}"\nBao gồm: nghĩa tiếng Việt, ví dụ câu IELTS, từ đồng nghĩa, cách dùng.`, 'Bạn là giáo viên từ vựng IELTS. Trả lời ngắn gọn bằng tiếng Việt.');
+    setVocabResult(result); setVocabLoading(false);
+  }
+
+  return (
+    <div>
+      <div style={{ background:'#12141f', border:'1px solid #2a2d3e', borderRadius:12, padding:20, marginBottom:20 }}>
+        <div style={{ color, fontWeight:700, fontSize:13, marginBottom:12 }}>📖 BÀI ĐỌC</div>
+        <div style={{ color:'#4f8ef7', fontWeight:700, fontSize:16, marginBottom:12 }}>{p.title}</div>
+        {p.text.split('\n\n').map((para,i)=>(
+          <p key={i} style={{ color:'#94a3b8', fontSize:14, lineHeight:1.9, marginBottom:12 }}>{para}</p>
+        ))}
+      </div>
+
+      <div style={{ background:color+'11', border:`1px solid ${color}33`, borderRadius:12, padding:16, marginBottom:20 }}>
+        <div style={{ color, fontWeight:600, fontSize:13, marginBottom:10 }}>🔍 Tra từ vựng học thuật</div>
+        <div style={{ display:'flex', gap:8 }}>
+          <input value={vocab} onChange={e=>setVocab(e.target.value)} onKeyDown={e=>e.key==='Enter'&&lookupVocab()}
+            placeholder="Nhập từ cần tra..." style={{ flex:1, background:'#12141f', border:'1px solid #2a2d3e', borderRadius:8, padding:'10px 14px', color:'#e2e8f0', fontSize:14, outline:'none' }} />
+          <button onClick={lookupVocab} disabled={vocabLoading} style={{ padding:'10px 18px', borderRadius:8, border:'none', background:color, color:'#fff', cursor:'pointer', fontWeight:700 }}>
+            {vocabLoading?'...':'Tra'}
+          </button>
+        </div>
+        {vocabResult && <div style={{ marginTop:12, color:'#94a3b8', fontSize:13, lineHeight:1.7, whiteSpace:'pre-wrap' }}>{vocabResult}</div>}
+      </div>
+
+      <div style={{ marginBottom:16 }}>
+        <div style={{ color, fontWeight:700, fontSize:13, marginBottom:16 }}>❓ CÂU HỎI</div>
+        {p.questions.map((q,i)=>{
+          const correct = submitted && answers[i]?.toLowerCase().trim()===q.answer.toLowerCase();
+          const wrong = submitted && !correct;
+          return (
+            <div key={i} style={{ background:submitted?(correct?'#22d3a522':'#ef444422'):'#12141f', border:`1px solid ${submitted?(correct?'#22d3a555':'#ef444455'):'#2a2d3e'}`, borderRadius:10, padding:16, marginBottom:12 }}>
+              <div style={{ color:'#e2e8f0', fontSize:14, marginBottom:10, lineHeight:1.6 }}>
+                <span style={{ color, fontWeight:700 }}>{i+1}. </span>{q.q}
+              </div>
+              {q.type==='short' ? (
+                <input value={answers[i]||''} onChange={e=>setAnswers(a=>({...a,[i]:e.target.value}))} disabled={submitted}
+                  placeholder="Nhập câu trả lời..."
+                  style={{ width:'100%', background:'#0f1117', border:'1px solid #2a2d3e', borderRadius:8, padding:'8px 12px', color:'#e2e8f0', fontSize:14, outline:'none' }} />
+              ) : (
+                <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                  {q.options.map(opt=>(
+                    <button key={opt} onClick={()=>!submitted&&setAnswers(a=>({...a,[i]:opt}))}
+                      style={{ padding:'8px 16px', borderRadius:8, border:'none', cursor:submitted?'default':'pointer', background:answers[i]===opt?color:'#2a2d3e', color:answers[i]===opt?'#fff':'#94a3b8', fontWeight:answers[i]===opt?700:400, transition:'all 0.15s' }}>
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {submitted && <div style={{ marginTop:8, fontSize:13 }}>
+                {correct ? <span style={{ color:'#22d3a5' }}>✅ Đúng!</span> : <span style={{ color:'#ef4444' }}>❌ Sai — Đáp án: <strong>{q.answer}</strong></span>}
+              </div>}
+            </div>
+          );
+        })}
+      </div>
+      {!submitted ? (
+        <button onClick={()=>setSubmitted(true)} style={{ padding:'12px 28px', borderRadius:10, border:'none', cursor:'pointer', background:`linear-gradient(135deg,${color},#6366f1)`, color:'#fff', fontWeight:700, fontSize:15 }}>✅ Nộp bài</button>
+      ) : (
+        <div style={{ background:color+'11', border:`1px solid ${color}33`, borderRadius:12, padding:20 }}>
+          <div style={{ color, fontWeight:700, fontSize:20 }}>Kết quả: {score} / {p.questions.length}</div>
+          <div style={{ color:'#94a3b8', marginTop:4 }}>{score===p.questions.length?'🎉 Hoàn hảo!':score>=2?'👍 Tốt! Tiếp tục luyện.':'📚 Đọc lại bài và thử lại nhé!'}</div>
+          <button onClick={()=>{setSubmitted(false);setAnswers({});}} style={{ marginTop:12, padding:'8px 18px', borderRadius:8, border:`1px solid ${color}55`, background:'transparent', color, cursor:'pointer', fontWeight:600 }}>🔄 Làm lại</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Progress ───────────────────────────────────────────────────────────────────
+function ProgressTracker() {
+  const saved = JSON.parse(localStorage.getItem('ielts_bands')||'{"listening":4,"reading":4,"writing":4,"speaking":4}');
+  const [bands,setBands] = useState(saved);
+  const overall = (Object.values(bands).reduce((a,b)=>a+b,0)/4).toFixed(1);
+
+  function update(skill,val) {
+    const next = {...bands,[skill]:val};
+    setBands(next);
+    localStorage.setItem('ielts_bands', JSON.stringify(next));
+  }
+
+  const pct = Math.round(Math.min(100,((parseFloat(overall)-4)/(6.5-4))*100));
+
+  return (
+    <div style={{ background:'#1a1d2e', border:'1px solid #2a2d3e', borderRadius:16, padding:24, marginBottom:24 }}>
+      <div style={{ color:'#e2e8f0', fontWeight:700, fontSize:16, marginBottom:20 }}>📊 Theo dõi tiến độ</div>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, marginBottom:20 }}>
+        {SKILLS.map(s=>(
+          <div key={s.id}>
+            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+              <span style={{ color:'#94a3b8', fontSize:13 }}>{s.icon} {s.label}</span>
+              <span style={{ background:s.color+'22', border:`1px solid ${s.color}55`, borderRadius:8, padding:'2px 10px', color:s.color, fontWeight:700, fontSize:15 }}>{bands[s.id].toFixed(1)}</span>
+            </div>
+            <div style={{ background:'#2a2d3e', borderRadius:99, height:8, overflow:'hidden', marginBottom:6 }}>
+              <div style={{ width:`${(bands[s.id]/9)*100}%`, background:s.color, height:'100%', borderRadius:99, transition:'width 0.5s ease' }} />
+            </div>
+            <input type="range" min={1} max={9} step={0.5} value={bands[s.id]} onChange={e=>update(s.id,parseFloat(e.target.value))}
+              style={{ width:'100%', accentColor:s.color }} />
+          </div>
+        ))}
+      </div>
+      <div style={{ background:'#12141f', borderRadius:12, padding:16, display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:12 }}>
+        <div><div style={{ color:'#64748b', fontSize:12 }}>Band hiện tại</div><div style={{ color:'#e2e8f0', fontSize:32, fontWeight:800 }}>{overall}</div></div>
+        <div style={{ flex:1, minWidth:120 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+            <span style={{ color:'#64748b', fontSize:12 }}>Tiến độ</span>
+            <span style={{ color:'#22d3a5', fontSize:12, fontWeight:700 }}>{pct}%</span>
+          </div>
+          <div style={{ background:'#2a2d3e', borderRadius:99, height:10 }}>
+            <div style={{ width:`${pct}%`, background:'linear-gradient(90deg,#4f8ef7,#22d3a5)', height:'100%', borderRadius:99, transition:'width 0.5s' }} />
+          </div>
+        </div>
+        <div style={{ textAlign:'right' }}><div style={{ color:'#64748b', fontSize:12 }}>Mục tiêu</div><div style={{ color:'#4f8ef7', fontSize:32, fontWeight:800 }}>6.5</div></div>
+      </div>
+    </div>
+  );
+}
+
+// ── App ────────────────────────────────────────────────────────────────────────
+function App() {
+  const [active,setActive] = useState(null);
+  const [showProgress,setShowProgress] = useState(false);
+
+  const skill = SKILLS.find(s=>s.id===active);
+
+  const todayPlan = [
+    { icon:'✍️', text:'Writing: Viết 1 bài Task 2 dạng Opinion Essay' },
+    { icon:'🎧', text:'Listening: 5 câu Dictation Section 1' },
+    { icon:'📖', text:'Reading: 1 passage + tra 10 từ vựng mới' },
+    { icon:'🎙️', text:'Speaking: Luyện 3 câu Part 1' },
+  ];
+
+  return (
+    <div style={{ minHeight:'100vh', background:'#0f1117' }}>
+      {/* Header */}
+      <div style={{ background:'linear-gradient(135deg,#1a1d2e,#0f1117)', borderBottom:'1px solid #2a2d3e', padding:'18px 24px', display:'flex', alignItems:'center', justifyContent:'space-between', position:'sticky', top:0, zIndex:10 }}>
+        <div>
+          <div style={{ fontSize:20, fontWeight:800, letterSpacing:'-0.5px' }}>
+            <span style={{ color:'#4f8ef7' }}>IELTS</span><span style={{ color:'#e2e8f0' }}> AI Tutor</span>
+          </div>
+          <div style={{ color:'#64748b', fontSize:12 }}>Band 4 → 6.5 · 6 tháng · 2 giờ/ngày</div>
+        </div>
+        <div style={{ display:'flex', gap:8 }}>
+          {active && <button onClick={()=>setActive(null)} style={{ padding:'8px 14px', borderRadius:8, border:'1px solid #2a2d3e', background:'transparent', color:'#94a3b8', cursor:'pointer', fontSize:13 }}>← Quay lại</button>}
+          <button onClick={()=>setShowProgress(v=>!v)} style={{ padding:'8px 14px', borderRadius:8, border:'1px solid #2a2d3e', background:showProgress?'#4f8ef7':'transparent', color:showProgress?'#fff':'#94a3b8', cursor:'pointer', fontSize:13 }}>📊 Tiến độ</button>
+        </div>
+      </div>
+
+      <div style={{ maxWidth:760, margin:'0 auto', padding:'24px 16px' }}>
+        {showProgress && <ProgressTracker />}
+
+        {!active ? (
+          <>
+            {/* Daily plan */}
+            <div style={{ background:'linear-gradient(135deg,#4f8ef722,#22d3a511)', border:'1px solid #4f8ef744', borderRadius:16, padding:20, marginBottom:24 }}>
+              <div style={{ fontWeight:700, fontSize:14, marginBottom:12 }}>📅 Kế hoạch hôm nay</div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+                {todayPlan.map(t=>(
+                  <div key={t.text} style={{ background:'#ffffff08', borderRadius:8, padding:'10px 12px', fontSize:13, color:'#94a3b8', lineHeight:1.5 }}>
+                    <span style={{ marginRight:6 }}>{t.icon}</span>{t.text}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Skill grid */}
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, marginBottom:24 }}>
+              {SKILLS.map(s=>(
+                <button key={s.id} onClick={()=>setActive(s.id)} className="skill-card"
+                  style={{ '--hover-color':s.color+'88', '--shadow-color':s.color+'22', background:'#1a1d2e', border:'1px solid #2a2d3e', borderRadius:16, padding:24, cursor:'pointer', textAlign:'left', outline:'none' }}>
+                  <div style={{ fontSize:32, marginBottom:12 }}>{s.icon}</div>
+                  <div style={{ color:s.color, fontWeight:800, fontSize:18, marginBottom:6 }}>{s.label}</div>
+                  <div style={{ color:'#64748b', fontSize:12, lineHeight:1.6 }}>{s.desc}</div>
+                  <div style={{ marginTop:16, display:'inline-block', padding:'6px 14px', borderRadius:6, background:s.color+'22', color:s.color, fontSize:12, fontWeight:600 }}>Bắt đầu →</div>
+                </button>
+              ))}
+            </div>
+
+            {/* Methods */}
+            <div style={{ background:'#1a1d2e', border:'1px solid #2a2d3e', borderRadius:16, padding:20 }}>
+              <div style={{ fontWeight:700, fontSize:14, marginBottom:12 }}>💡 Phương pháp học</div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+                {[
+                  {icon:'🎧',title:'Dictation',desc:'Nghe → chép → so sánh → phân tích lỗi'},
+                  {icon:'🔁',title:'Spaced Repetition',desc:'Ôn từ vựng theo chu kỳ khoa học'},
+                  {icon:'🪞',title:'Shadowing',desc:'Nghe → bắt chước → ghi âm → so sánh'},
+                  {icon:'🤖',title:'AI Chấm điểm',desc:'Nộp bài Writing/Speaking → nhận feedback ngay'},
+                ].map(m=>(
+                  <div key={m.title} style={{ background:'#12141f', borderRadius:10, padding:14 }}>
+                    <div style={{ fontSize:20, marginBottom:6 }}>{m.icon}</div>
+                    <div style={{ color:'#e2e8f0', fontWeight:600, fontSize:13 }}>{m.title}</div>
+                    <div style={{ color:'#64748b', fontSize:12, marginTop:4, lineHeight:1.5 }}>{m.desc}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        ) : (
+          <div>
+            <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:24, padding:'16px 20px', background:'#1a1d2e', borderRadius:12, border:`1px solid ${skill.color}44` }}>
+              <span style={{ fontSize:28 }}>{skill.icon}</span>
+              <div>
+                <div style={{ fontWeight:800, fontSize:18, color:skill.color }}>{skill.label}</div>
+                <div style={{ color:'#64748b', fontSize:12 }}>{skill.desc}</div>
+              </div>
+            </div>
+            {active==='writing'   && <WritingModule />}
+            {active==='speaking'  && <SpeakingModule />}
+            {active==='listening' && <ListeningModule />}
+            {active==='reading'   && <ReadingModule />}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+
+<script>
+function saveApiKey() {
+  const key = document.getElementById('api-key-input').value.trim();
+  if (key) { localStorage.setItem('ielts_api_key', key); }
+  document.getElementById('api-modal').classList.add('hidden');
+}
+function skipApiKey() {
+  document.getElementById('api-modal').classList.add('hidden');
+}
+// Show modal only if no key saved
+window.addEventListener('DOMContentLoaded', () => {
+  if (!localStorage.getItem('ielts_api_key')) {
+    document.getElementById('api-modal').classList.remove('hidden');
+  } else {
+    document.getElementById('api-modal').classList.add('hidden');
+  }
+});
+</script>
+</body>
+</html>
